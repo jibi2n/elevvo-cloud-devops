@@ -1,0 +1,6 @@
+# Laptop: C:\Users\<me>\.ssh\config  (no file extension!)
+Host elevvo
+    HostName 100.89.28.19
+    User jibi
+    IdentityFile ~/.ssh/id_ed25519_elevvo
+    IdentitiesOnly yes
