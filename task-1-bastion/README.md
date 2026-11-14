@@ -258,6 +258,23 @@ echo "<h1>Elevvo Task 1: served by systemd</h1>" | sudo tee /opt/webapp/index.ht
 sudo chown -R webapp:webapp /opt/webapp
 ```
 
+These commands print nothing on success, so check the result:
+
+```bash
+jibi@elevvo-ubuntu:~$ id webapp
+uid=999(webapp) gid=988(webapp) groups=988(webapp)
+jibi@elevvo-ubuntu:~$ ls -la /opt/webapp
+total 12
+drwxr-xr-x 2 webapp webapp 4096 Nov 13 09:41 .
+drwxr-xr-x 3 root   root   4096 Nov 13 09:40 ..
+-rw-r--r-- 1 webapp webapp   42 Nov 13 09:41 index.html
+```
+
+<details><summary>Screenshot</summary>
+
+![webapp user and folder](screenshots/18-webapp-user-and-dir.png)
+</details>
+
 Unit file `/etc/systemd/system/webapp.service` ([configs/webapp.service](configs/webapp.service)):
 
 ```ini
@@ -408,6 +425,23 @@ Nov 13 09:48:13 ... Started webapp.service - Simple Python web server (Elevvo Ta
 
 ![browser on 8080](screenshots/15-browser-8080.png)
 
+Same check from the laptop's command line, through the firewall (`curl.exe` because plain `curl` in PowerShell is an alias for `Invoke-WebRequest`):
+
+```text
+PS> curl.exe -I http://192.168.100.203:8080
+HTTP/1.0 200 OK
+Server: SimpleHTTP/0.6 Python/3.12.3
+Date: Sat, 14 Nov 2026 08:26:36 GMT
+Content-type: text/html
+Content-Length: 42
+Last-Modified: Fri, 13 Nov 2026 09:41:10 GMT
+```
+
+<details><summary>Screenshot</summary>
+
+![curl 8080](screenshots/23-curl-8080.png)
+</details>
+
 ---
 
 ### 6. Firewall (UFW)
@@ -436,6 +470,8 @@ To                         Action      From
 ```
 
 This is the state before the bonus. In the bonus, SSH gets limited to Tailscale only.
+
+> **Note:** Port 8080 is open for Task 1 only. In Task 2, the app moves to `127.0.0.1` behind Nginx.
 
 > ✍️ **My explanation:**
 > _Guide questions:_
@@ -493,6 +529,58 @@ Tailscale gives the VM a private `100.x.x.x` IP that only my own devices can rea
 
 ### Proof
 
+`ssh.socket` is off and `ssh.service` is on (these commands print nothing on success, so check):
+
+```bash
+jibi@elevvo-ubuntu:~$ systemctl is-enabled ssh.socket ssh.service
+disabled
+enabled
+```
+
+<details><summary>Screenshot</summary>
+
+![ssh.socket disabled, ssh.service enabled](screenshots/20-ssh-socket-disabled.png)
+</details>
+
+The Tailscale override is loaded on top of the stock unit:
+
+```bash
+jibi@elevvo-ubuntu:~$ systemctl cat ssh
+# /usr/lib/systemd/system/ssh.service
+[Unit]
+Description=OpenBSD Secure Shell server
+Documentation=man:sshd(8) man:sshd_config(5)
+After=network.target auditd.service
+ConditionPathExists=!/etc/ssh/sshd_not_to_be_run
+
+[Service]
+EnvironmentFile=-/etc/default/ssh
+ExecStartPre=/usr/sbin/sshd -t
+ExecStart=/usr/sbin/sshd -D $SSHD_OPTS
+ExecReload=/usr/sbin/sshd -t
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=on-failure
+RestartPreventExitStatus=255
+Type=notify
+RuntimeDirectory=sshd
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target
+Alias=sshd.service
+
+# /etc/systemd/system/ssh.service.d/override.conf
+[Unit]
+After=tailscaled.service
+Wants=tailscaled.service
+```
+
+<details><summary>Screenshot</summary>
+
+![systemctl cat ssh](screenshots/19-systemctl-cat-ssh.png)
+</details>
+
 SSH listens only on the Tailscale IP:
 
 ```bash
@@ -500,27 +588,78 @@ jibi@elevvo-ubuntu:~$ sudo ss -tlnp | grep :22
 LISTEN 0      128      100.89.28.19:22      0.0.0.0:*    users:(("sshd",pid=2188,fd=3))
 ```
 
-Login through Tailscale works (and LAN SSH to `192.168.100.203` now times out):
+Laptop `~/.ssh/config` now points at the Tailscale IP ([configs/laptop-ssh-config](configs/laptop-ssh-config)):
 
-![ssh over tailscale](screenshots/16-ssh-over-tailscale.png)
+```text
+Host elevvo
+    HostName 100.89.28.19
+    User jibi
+    IdentityFile ~/.ssh/id_ed25519_elevvo
+    IdentitiesOnly yes
+```
 
-Final firewall:
+SSH to the LAN IP `192.168.100.203` times out, and `ssh elevvo` over Tailscale logs in:
+
+```text
+PS> ssh jibi@192.168.100.203
+ssh: connect to host 192.168.100.203 port 22: Connection timed out
+```
+
+![LAN ssh times out](screenshots/22-lan-ssh-timeout.png)
+
+![ssh elevvo over tailscale](screenshots/16-ssh-over-tailscale.png)
+
+The "Last login ... from 100.89.230.112" line is the laptop's Tailscale IP, so the session came in over Tailscale.
+
+Final firewall (22 only on `tailscale0`, plus 8080):
 
 ```bash
-jibi@elevvo-ubuntu:~$ sudo ufw status
+jibi@elevvo-ubuntu:~$ sudo ufw status verbose
 Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), disabled (routed)
+New profiles: skip
 
 To                         Action      From
 --                         ------      ----
-8080/tcp                   ALLOW       Anywhere
-22/tcp on tailscale0       ALLOW       Anywhere
-8080/tcp (v6)              ALLOW       Anywhere (v6)
-22/tcp (v6) on tailscale0  ALLOW       Anywhere (v6)
+8080/tcp                   ALLOW IN    Anywhere
+22/tcp on tailscale0       ALLOW IN    Anywhere
+8080/tcp (v6)              ALLOW IN    Anywhere (v6)
+22/tcp (v6) on tailscale0  ALLOW IN    Anywhere (v6)
 ```
 
 <details><summary>Screenshot</summary>
 
 ![ufw final](screenshots/17-ufw-final.png)
+</details>
+
+### Auth log: rejected logins
+
+```bash
+jibi@elevvo-ubuntu:~$ sudo grep -E "Failed|Invalid|not allowed|preauth" /var/log/auth.log | tail -n 15
+2026-11-13T09:32:52.722913+00:00 elevvo-ubuntu sshd[1300]: Connection reset by authenticating user jibi 192.168.100.200 port 60250 [preauth]
+2026-11-13T09:33:29.538815+00:00 elevvo-ubuntu sshd[1302]: Connection reset by authenticating user jibi 192.168.100.200 port 63675 [preauth]
+2026-11-13T09:33:38.030876+00:00 elevvo-ubuntu sshd[1304]: Connection reset by authenticating user jibi 192.168.100.200 port 57302 [preauth]
+2026-11-13T09:33:40.820311+00:00 elevvo-ubuntu sshd[1306]: Connection reset by authenticating user jibi 192.168.100.200 port 57051 [preauth]
+2026-11-13T09:33:59.213288+00:00 elevvo-ubuntu sshd[1310]: User root from 192.168.100.200 not allowed because not listed in AllowUsers
+2026-11-13T09:33:59.227753+00:00 elevvo-ubuntu sshd[1310]: Connection reset by invalid user root 192.168.100.200 port 55197 [preauth]
+2026-11-13T09:35:27.469210+00:00 elevvo-ubuntu sshd[1382]: Connection reset by authenticating user jibi 192.168.100.200 port 53687 [preauth]
+2026-11-13T09:35:30.444006+00:00 elevvo-ubuntu sshd[1384]: User root from 192.168.100.200 not allowed because not listed in AllowUsers
+2026-11-13T09:35:30.460254+00:00 elevvo-ubuntu sshd[1384]: Connection reset by invalid user root 192.168.100.200 port 55069 [preauth]
+2026-11-13T10:06:37.776246+00:00 elevvo-ubuntu sshd[2263]: Connection reset by authenticating user jibi 192.168.100.200 port 64588 [preauth]
+2026-11-13T10:09:17.360201+00:00 elevvo-ubuntu sshd[2269]: Connection reset by authenticating user jibi 192.168.100.200 port 55133 [preauth]
+2026-11-14T08:15:11.211685+00:00 elevvo-ubuntu sudo:     jibi : TTY=pts/0 ; PWD=/home/jibi ; USER=root ; COMMAND=/usr/bin/grep -E 'Failed|Invalid|not allowed|preauth' /var/log/auth.log
+```
+
+Times are UTC (`+00:00`). Lines to look at:
+
+- `User root ... not allowed because not listed in AllowUsers`: root logins are refused before any auth.
+- `Connection reset by authenticating user jibi ... [preauth]`: the password-only attempts. The server only offers `publickey`, so the client gives up before logging in.
+- The last line is just this `grep` itself being run with `sudo`.
+
+<details><summary>Screenshot</summary>
+
+![auth log](screenshots/21-auth-log.png)
 </details>
 
 > ✍️ **My explanation:**
@@ -539,3 +678,4 @@ To                         Action      From
 > - What was the hardest part, and how did you figure it out?
 > - What surprised you (for example, the cloud-init drop-in overriding your setting)?
 > - What is one habit you will keep (snapshots, `sshd -t`, second session)?
+
