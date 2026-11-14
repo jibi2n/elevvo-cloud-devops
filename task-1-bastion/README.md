@@ -503,7 +503,7 @@ Tailscale gives the VM a private `100.x.x.x` IP that only my own devices can rea
    sudo systemctl enable ssh.service
    ```
 
-4. Make `sshd` wait for Tailscale on boot (otherwise the `100.x` IP does not exist yet and SSH fails to start):
+4. Make `sshd` start after Tailscale on boot:
 
    ```bash
    sudo systemctl edit ssh
@@ -517,7 +517,27 @@ Tailscale gives the VM a private `100.x.x.x` IP that only my own devices can rea
 
    Saved in [configs/ssh-override.conf](configs/ssh-override.conf).
 
-5. Test, restart, and update the firewall:
+5. Allow binding to an IP that does not exist yet (added after a reboot broke SSH, see [What I learned](#what-i-learned)):
+
+   ```bash
+   echo "net.ipv4.ip_nonlocal_bind = 1" | sudo tee /etc/sysctl.d/99-nonlocal-bind.conf
+   sudo sysctl --system
+   sudo reboot
+   ```
+
+   `After=tailscaled.service` only waits for the Tailscale service to start, not for the `100.x` IP to be ready. This setting lets `sshd` bind to the Tailscale IP early, so SSH comes up on every boot. Saved in [configs/99-nonlocal-bind.conf](configs/99-nonlocal-bind.conf).
+
+   ```bash
+   jibi@elevvo-ubuntu:~$ sysctl net.ipv4.ip_nonlocal_bind
+   net.ipv4.ip_nonlocal_bind = 1
+   ```
+
+   <details><summary>Screenshot</summary>
+
+   ![ip_nonlocal_bind is on](screenshots/24-nonlocal-bind.png)
+   </details>
+
+6. Test, restart, and update the firewall:
 
    ```bash
    sudo sshd -t && sudo systemctl restart ssh
@@ -525,7 +545,7 @@ Tailscale gives the VM a private `100.x.x.x` IP that only my own devices can rea
    sudo ufw delete allow OpenSSH
    ```
 
-6. On the laptop, change `HostName` in `~/.ssh/config` to `100.89.28.19`.
+7. On the laptop, change `HostName` in `~/.ssh/config` to `100.89.28.19`.
 
 ### Proof
 
@@ -673,9 +693,18 @@ Times are UTC (`+00:00`). Lines to look at:
 
 ## What I learned
 
+### SSH broke after a reboot (boot race)
+
+After a reboot, `ssh elevvo` failed with **Connection refused**. That was a useful clue: "timed out" means nothing answered (like the LAN IP after the firewall change), but "refused" means the VM answered over Tailscale and nothing was listening on port 22. So the network was fine and `sshd` was the problem.
+
+I got in through the **Proxmox Console** (it does not need SSH) and ran `systemctl status ssh`. `sshd` had failed with "Cannot assign requested address". It had started before Tailscale gave the VM its `100.89.28.19` IP, so it could not bind to it, and it gave up. My `After=tailscaled.service` override did not help, because it only waits for the `tailscaled` service to start, not for the IP to be ready. Restarting `ssh` got me back in for now.
+
+The permanent fix is `net.ipv4.ip_nonlocal_bind = 1` ([step 5 of the Bonus](#steps-1)). It lets `sshd` bind to the Tailscale IP before the IP exists, so SSH comes up on every boot. After another reboot, `ssh elevvo` connected right away.
+
+Lesson: always test a reboot after changing how a service starts, and keep a way in that does not depend on that service (here, the Proxmox Console).
+
 > ✍️ **My explanation:**
 > _Guide questions:_
 > - What was the hardest part, and how did you figure it out?
 > - What surprised you (for example, the cloud-init drop-in overriding your setting)?
 > - What is one habit you will keep (snapshots, `sshd -t`, second session)?
-
