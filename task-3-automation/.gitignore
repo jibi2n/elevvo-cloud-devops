@@ -1,0 +1,8 @@
+#secrets
+*.env
+.env
+#never commit archives or logs
+*.tar.gz
+*.log
+
+__pycache__/

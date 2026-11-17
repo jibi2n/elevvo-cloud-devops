@@ -1,0 +1,5 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# m  h  dom mon dow  user       command
+  0  0  *   *   *    logbackup  /usr/local/bin/lab-backup.sh >> /var/log/lab-backup/lab-backup.log 2>&1
+
