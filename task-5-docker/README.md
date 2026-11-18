@@ -392,6 +392,22 @@ jibi@elevvo-ubuntu:~/elevvo-cloud-devops/task-5-docker$ curl -s localhost:8000; 
 
 ## Proof
 
+### Both containers healthy
+
+```bash
+jibi@elevvo-ubuntu:~/elevvo-cloud-devops/task-5-docker$ docker compose ps
+NAME                  IMAGE                  COMMAND                  SERVICE   CREATED         STATUS                   PORTS
+task-5-docker-db-1    postgres:16-alpine     "docker-entrypoint.s…"   db        2 minutes ago   Up 2 minutes (healthy)   5432/tcp
+task-5-docker-web-1   elevvo-task5-web:1.0   "gunicorn --bind 0.0…"   web       2 minutes ago   Up 2 minutes (healthy)   127.0.0.1:8000->8000/tcp
+```
+
+`db` passed `pg_isready`, and `web` passed its `HEALTHCHECK` on `/health`.
+
+<details><summary>Screenshot</summary>
+
+![compose ps healthy](screenshots/11-compose-ps-healthy.png)
+</details>
+
 ### The app runs as non-root
 
 ```bash
@@ -514,6 +530,37 @@ jibi@elevvo-ubuntu:~/elevvo-cloud-devops/task-5-docker$ echo $?
 
 **0 HIGH/CRITICAL** in the OS and in every Python package, and exit code `0`, so the gate would now let the stack start.
 
+### Full gate run: passed and started
+
+Running the whole script again now goes all the way through:
+
+```text
+jibi@elevvo-ubuntu:~/elevvo-cloud-devops/task-5-docker$ ./scan-and-run.sh
+ => CACHED [runtime 2/6] RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+...
+ ✔ Image elevvo-task5-web:1.0 Built
+...
+INFO Detected OS family="debian" version="13.7"
+
+Report Summary
+│ elevvo-task5-web:1.0 (debian 13.7)                                         │ debian     │ 0 │
+│ venv/lib/python3.12/site-packages/flask-3.0.3.dist-info/METADATA           │ python-pkg │ 0 │
+│ venv/lib/python3.12/site-packages/gunicorn-22.0.0.dist-info/METADATA       │ python-pkg │ 0 │
+│ venv/lib/python3.12/site-packages/psycopg-3.2.1.dist-info/METADATA         │ python-pkg │ 0 │
+│ venv/lib/python3.12/site-packages/werkzeug-3.1.9.dist-info/METADATA        │ python-pkg │ 0 │
+...
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+
+Scan passed, starting stack
+[+] up 2/2
+ ✔ Container task-5-docker-db-1  Healthy
+ ✔ Container task-5-docker-web-1 Started
+```
+
+Same script, same command. The only change was the patched image, and this time it printed "Scan passed, starting stack" and ran `docker compose up -d`.
+
 > ✍️ **My explanation:**
 > _Guide questions:_
 > - Why scan **before** running, not after?
@@ -534,11 +581,3 @@ jibi@elevvo-ubuntu:~/elevvo-cloud-devops/task-5-docker$ echo $?
 > _Guide questions:_
 > - What was the hardest part, and how did you figure it out?
 > - What would you change to make this production ready?
-
----
-
-## Still to capture
-
-- [ ] `./scan-and-run.sh` passing after the fix (prints "Scan passed, starting stack", then starts the stack)
-- [ ] `docker compose ps` with **both** containers `(healthy)` (in the capture above, `web` was still `health: starting`)
-- [ ] `docker network inspect task-5-docker_frontend | grep -E '"Internal"|"Name"'` showing only `web-1` on `frontend`
